@@ -5,10 +5,10 @@ import { ethers } from "ethers";
 import fs from "fs";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import fetch from "node-fetch";
+import readline from "readline";
 
 const RPC_RISE = process.env.RPC_RISE;
 const WETH_ADDRESS = process.env.WETH_ADDRESS;
-const NETWORK_NAME = "RISE TESTNET";
 
 // === Load private keys ===
 const privateKeys = fs.readFileSync("privatekey.txt", "utf-8").trim().split("\n");
@@ -22,14 +22,13 @@ try {
 }
 
 // === ABI ===
-const ERC20ABI = [
-  "function decimals() view returns (uint8)",
-  "function balanceOf(address owner) view returns (uint256)",
-  "function approve(address spender, uint256 amount) external returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)"
+const WETH_ABI = [
+  "function deposit() payable",
+  "function withdraw(uint256 wad)",
+  "function balanceOf(address owner) view returns (uint256)"
 ];
 
-// === Provider dengan Proxy ===
+// === Provider with Proxy ===
 function getProvider(rpcUrl) {
   if (proxy) {
     try {
@@ -47,14 +46,10 @@ function getShortAddress(address) {
   return address.slice(0, 6) + "..." + address.slice(-4);
 }
 
-// === Variabel ===
-let transactionLogs = [];
-let globalWallets = [];
-
 // === Blessed UI ===
 const screen = blessed.screen({
   smartCSR: true,
-  title: "GasPump Swap - Multi Wallet",
+  title: "ETH <-> WETH Multi-Wallet Bot",
   fullUnicode: true,
   mouse: true
 });
@@ -73,7 +68,7 @@ const headerBox = blessed.box({
   style: { fg: "white", bg: "default" }
 });
 
-figlet.text("NT EXHAUST".toUpperCase(), { font: "Speed", horizontalLayout: "default" }, (err, data) => {
+figlet.text("NT EXHAUST", { font: "Speed" }, (err, data) => {
   if (err) headerBox.setContent("{center}{bold}NT Exhaust{/bold}{/center}");
   else headerBox.setContent(`{center}{bold}{bright-cyan-fg}${data}{/bright-cyan-fg}{/bold}{/center}`);
   safeRender();
@@ -97,43 +92,81 @@ const logsBox = blessed.box({
 screen.append(headerBox);
 screen.append(logsBox);
 
-// === Logging ===
 function addLog(message, type = "system") {
   const timestamp = new Date().toLocaleTimeString();
   let coloredMessage = message;
   if (type === "system") coloredMessage = `{bright-white-fg}${message}{/bright-white-fg}`;
   if (type === "error") coloredMessage = `{bright-red-fg}${message}{/bright-red-fg}`;
   if (type === "success") coloredMessage = `{bright-green-fg}${message}{/bright-green-fg}`;
-  transactionLogs.push(`{grey-fg}${timestamp}{/grey-fg} ${coloredMessage}`);
-  logsBox.setContent(transactionLogs.join("\n"));
+  logsBox.setContent(logsBox.content + `\n{grey-fg}${timestamp}{/grey-fg} ${coloredMessage}`);
   logsBox.setScrollPerc(100);
   safeRender();
 }
 
-// === Update semua wallet ===
-async function updateAllWallets() {
-  globalWallets = [];
-  for (const pk of privateKeys) {
+// === Core Logic ===
+async function runBot(loopCount) {
+  const provider = getProvider(RPC_RISE);
+  const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
+
+  addLog("Fetching balances...", "system");
+  for (const wallet of wallets) {
     try {
-      const provider = getProvider(RPC_RISE);
-      const wallet = new ethers.Wallet(pk.trim(), provider);
+      const ethBal = await provider.getBalance(wallet.address);
+      const wethContract = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
+      const wethBal = await wethContract.balanceOf(wallet.address);
 
-      const nativeBalance = await provider.getBalance(wallet.address);
-      const wethContract = new ethers.Contract(WETH_ADDRESS, ERC20ABI, provider);
-      const wethBalance = await wethContract.balanceOf(wallet.address);
-
-      globalWallets.push(wallet);
-      addLog(
-        `Wallet ${getShortAddress(wallet.address)} | ETH: ${Number(ethers.formatEther(nativeBalance)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBalance)).toFixed(4)} | Proxy: ${proxy || "none"}`,
-        "system"
-      );
+      addLog(`Wallet ${getShortAddress(wallet.address)} | ETH: ${Number(ethers.formatEther(ethBal)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(4)} | Proxy: ${proxy || "none"}`, "system");
     } catch (err) {
-      addLog(`Error wallet ${pk.slice(0,6)}..: ${err.message}`, "error");
+      addLog(`Error reading ${wallet.address}: ${err.message}`, "error");
     }
   }
+
+  addLog(`Starting ${loopCount} swaps per wallet...`, "system");
+
+  for (let i = 1; i <= loopCount; i++) {
+    addLog(`=== Loop ${i} ===`, "system");
+    for (const wallet of wallets) {
+      try {
+        const ethBal = await provider.getBalance(wallet.address);
+        const wethContract = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
+        const amount = ethBal / BigInt(2); // 50% ETH
+
+        if (amount > 0n) {
+          // Swap ETH -> WETH
+          const tx1 = await wethContract.deposit({ value: amount });
+          addLog(`[${getShortAddress(wallet.address)}] Deposit TX: ${tx1.hash}`, "system");
+          await tx1.wait();
+          addLog(`[${getShortAddress(wallet.address)}] Deposit Confirmed`, "success");
+
+          // Swap WETH -> ETH
+          const wethBalAfter = await wethContract.balanceOf(wallet.address);
+          const tx2 = await wethContract.withdraw(wethBalAfter);
+          addLog(`[${getShortAddress(wallet.address)}] Withdraw TX: ${tx2.hash}`, "system");
+          await tx2.wait();
+          addLog(`[${getShortAddress(wallet.address)}] Withdraw Confirmed`, "success");
+        } else {
+          addLog(`[${getShortAddress(wallet.address)}] Skipped: No ETH`, "error");
+        }
+      } catch (err) {
+        addLog(`[${getShortAddress(wallet.address)}] Swap Error: ${err.message}`, "error");
+      }
+    }
+  }
+
+  addLog("All swaps completed!", "success");
 }
 
-// === Jalankan ===
-screen.key(["escape", "q", "C-c"], () => process.exit(0)); // q = quit
-addLog("Multi-wallet bot started!", "system");
-updateAllWallets();
+// === Input prompt ===
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+rl.question("Berapa kali transaksi per wallet? ", answer => {
+  const loopCount = parseInt(answer);
+  if (isNaN(loopCount) || loopCount <= 0) {
+    console.log("Input tidak valid!");
+    process.exit(1);
+  }
+  rl.close();
+  runBot(loopCount);
+});
+
+// === Exit shortcut ===
+screen.key(["q", "escape", "C-c"], () => process.exit(0));

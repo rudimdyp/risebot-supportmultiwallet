@@ -64,7 +64,7 @@ const headerBox = blessed.box({
   width: "100%",
   tags: true
 });
-figlet.text("NT EXHAUST", { font: "Speed" }, (err, data) => {
+figlet.text("RISE TESTNET BOT", { font: "Speed" }, (err, data) => {
   headerBox.setContent(`{center}{bright-cyan-fg}${data}{/bright-cyan-fg}`);
   safeRender();
 });
@@ -328,3 +328,4 @@ async function runSwap(mode, amountEth, loops, randomize) {
   }
 }
 safeRender();
+

@@ -10,14 +10,16 @@ const RPC_RISE = process.env.RPC_RISE;
 const WETH_ADDRESS = process.env.WETH_ADDRESS;
 const NETWORK_NAME = "RISE TESTNET";
 
-// === Load private keys & proxies ===
+// === Load private keys ===
 const privateKeys = fs.readFileSync("privatekey.txt", "utf-8").trim().split("\n");
-const proxies = fs.readFileSync("proxy.txt", "utf-8").trim().split("\n");
 
-const wallets = privateKeys.map((pk, i) => ({
-  privateKey: pk.trim(),
-  proxy: proxies[i] ? proxies[i].trim() : null
-}));
+// === Load single proxy (rotating proxy) ===
+let proxy = null;
+try {
+  proxy = fs.readFileSync("proxy.txt", "utf-8").trim();
+} catch (e) {
+  console.log("Proxy file not found, running without proxy.");
+}
 
 // === ABI ===
 const ERC20ABI = [
@@ -28,11 +30,10 @@ const ERC20ABI = [
 ];
 
 // === Provider dengan Proxy ===
-function getProvider(rpcUrl, proxy) {
+function getProvider(rpcUrl) {
   if (proxy) {
     try {
       const agent = new HttpsProxyAgent(proxy);
-      // Custom fetch untuk override
       const customFetch = (req, init) => fetch(req, { ...init, agent });
       return new ethers.JsonRpcProvider(rpcUrl, undefined, { fetch: customFetch });
     } catch (err) {
@@ -112,10 +113,10 @@ function addLog(message, type = "system") {
 // === Update semua wallet ===
 async function updateAllWallets() {
   globalWallets = [];
-  for (const w of wallets) {
+  for (const pk of privateKeys) {
     try {
-      const provider = getProvider(RPC_RISE, w.proxy);
-      const wallet = new ethers.Wallet(w.privateKey, provider);
+      const provider = getProvider(RPC_RISE);
+      const wallet = new ethers.Wallet(pk.trim(), provider);
 
       const nativeBalance = await provider.getBalance(wallet.address);
       const wethContract = new ethers.Contract(WETH_ADDRESS, ERC20ABI, provider);
@@ -123,16 +124,16 @@ async function updateAllWallets() {
 
       globalWallets.push(wallet);
       addLog(
-        `Wallet ${getShortAddress(wallet.address)} | ETH: ${Number(ethers.formatEther(nativeBalance)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBalance)).toFixed(4)} | Proxy: ${w.proxy || "none"}`,
+        `Wallet ${getShortAddress(wallet.address)} | ETH: ${Number(ethers.formatEther(nativeBalance)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBalance)).toFixed(4)} | Proxy: ${proxy || "none"}`,
         "system"
       );
     } catch (err) {
-      addLog(`Error wallet ${w.privateKey.slice(0,6)}..: ${err.message}`, "error");
+      addLog(`Error wallet ${pk.slice(0,6)}..: ${err.message}`, "error");
     }
   }
 }
 
 // === Jalankan ===
-screen.key(["escape", "q", "C-c"], () => process.exit(0));
+screen.key(["escape", "q", "C-c"], () => process.exit(0)); // q = quit
 addLog("Multi-wallet bot started!", "system");
 updateAllWallets();

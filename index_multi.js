@@ -27,21 +27,21 @@ const ERC20ABI = [
   "function allowance(address owner, address spender) view returns (uint256)"
 ];
 
-// === Utility ===
+// === Provider dengan Proxy ===
 function getProvider(rpcUrl, proxy) {
-  try {
-    if (proxy) {
+  if (proxy) {
+    try {
       const agent = new HttpsProxyAgent(proxy);
-      return new ethers.JsonRpcProvider(rpcUrl, {
-        staticNetwork: null,
-        fetchFn: (req, init) => fetch(req, { ...init, agent })
-      });
+      // Custom fetch untuk override
+      const customFetch = (req, init) => fetch(req, { ...init, agent });
+      return new ethers.JsonRpcProvider(rpcUrl, undefined, { fetch: customFetch });
+    } catch (err) {
+      addLog(`Proxy error (${proxy}): ${err.message}. Fallback tanpa proxy.`, "error");
     }
-  } catch (err) {
-    addLog(`Proxy error (${proxy}): ${err.message}. Fallback tanpa proxy.`, "error");
   }
   return new ethers.JsonRpcProvider(rpcUrl);
 }
+
 function getShortAddress(address) {
   return address.slice(0, 6) + "..." + address.slice(-4);
 }
@@ -57,11 +57,13 @@ const screen = blessed.screen({
   fullUnicode: true,
   mouse: true
 });
+
 let renderTimeout;
 function safeRender() {
   if (renderTimeout) clearTimeout(renderTimeout);
   renderTimeout = setTimeout(() => { screen.render(); }, 50);
 }
+
 const headerBox = blessed.box({
   top: 0,
   left: "center",
@@ -69,11 +71,13 @@ const headerBox = blessed.box({
   tags: true,
   style: { fg: "white", bg: "default" }
 });
+
 figlet.text("NT EXHAUST".toUpperCase(), { font: "Speed", horizontalLayout: "default" }, (err, data) => {
   if (err) headerBox.setContent("{center}{bold}NT Exhaust{/bold}{/center}");
   else headerBox.setContent(`{center}{bold}{bright-cyan-fg}${data}{/bright-cyan-fg}{/bold}{/center}`);
   safeRender();
 });
+
 const logsBox = blessed.box({
   label: " Transaction Logs ",
   left: 0,
@@ -88,6 +92,7 @@ const logsBox = blessed.box({
   content: "",
   style: { border: { fg: "bright-cyan" }, bg: "default" }
 });
+
 screen.append(headerBox);
 screen.append(logsBox);
 

@@ -83,7 +83,6 @@ const headerBox = blessed.box({
   tags: true
 });
 
-// === Change header text ===
 figlet.text("RISE TESTNET BOT", { font: "Speed" }, (err, data) => {
   headerBox.setContent(`{center}{bright-cyan-fg}${data}{/bright-cyan-fg}`);
   safeRender();
@@ -171,6 +170,7 @@ let swapMode = "both";
 let swapAmount = 0.001;
 let loopCount = 1;
 let randomizeAmount = true;
+let autoDaily = false;
 
 let isRunning = false;
 let stopRequested = false;
@@ -183,6 +183,7 @@ function showMenu() {
 [2] Swap Amount: {cyan-fg}${swapAmount} ETH{/cyan-fg} (input)
 [3] Loop Count: {cyan-fg}${loopCount}{/cyan-fg} (input)
 [4] Randomize Amount: {cyan-fg}${randomizeAmount ? "ON" : "OFF"}{/cyan-fg}
+[5] Auto Daily: {cyan-fg}${autoDaily ? "ON" : "OFF"}{/cyan-fg}
 
 [T] Lihat Nonce (jumlah transaksi)
 [Enter] Start Swap
@@ -195,7 +196,6 @@ function showMenu() {
   showBalances();
 }
 
-// Show balances when menu visible
 async function showBalances() {
   const provider = getProvider(RPC_RISE);
   const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
@@ -209,7 +209,7 @@ async function showBalances() {
 
 showMenu();
 
-// Key handlers
+// === Key Handlers ===
 screen.key(["1"], () => {
   if (swapMode === "eth->weth") swapMode = "weth->eth";
   else if (swapMode === "weth->eth") swapMode = "both";
@@ -240,7 +240,11 @@ screen.key(["4"], () => {
   showMenu();
 });
 
-// Show Nonce info
+screen.key(["5"], () => {
+  autoDaily = !autoDaily;
+  showMenu();
+});
+
 screen.key(["t"], async () => {
   menuBox.hidden = true;
   logsBox.hidden = true;
@@ -260,7 +264,6 @@ screen.key(["t"], async () => {
   safeRender();
 });
 
-// Back from nonce menu
 screen.key(["b"], () => {
   if (!nonceBox.hidden) {
     nonceBox.hidden = true;
@@ -268,7 +271,6 @@ screen.key(["b"], () => {
   }
 });
 
-// Start Swap
 screen.key(["enter"], async () => {
   if (isRunning) return;
   menuBox.hidden = true;
@@ -278,10 +280,18 @@ screen.key(["enter"], async () => {
 
   isRunning = true;
   stopRequested = false;
-  addLog(`Starting swap: Mode=${swapMode}, Amount=${swapAmount} ETH, Loops=${loopCount}`, "system");
-  await runSwap(swapMode, swapAmount, loopCount, randomizeAmount);
-  isRunning = false;
 
+  do {
+    addLog(`Starting swap: Mode=${swapMode}, Amount=${swapAmount} ETH, Loops=${loopCount}`, "system");
+    await runSwap(swapMode, swapAmount, loopCount, randomizeAmount);
+    if (!stopRequested && autoDaily) {
+      const nextRun = new Date(Date.now() + 86400000);
+      addLog(`Next swap in 24 hours at ${nextRun.toLocaleString()}`, "system");
+      await sleep(86400000);
+    }
+  } while (autoDaily && !stopRequested);
+
+  isRunning = false;
   if (!stopRequested) {
     addLog("Swaps completed. Returning to menu...", "success");
     setTimeout(showMenu, 2000);
@@ -311,7 +321,7 @@ async function runSwap(mode, amountEth, loops, randomize) {
       try {
         let amount = amountEth;
         if (randomize) {
-          const variance = amountEth * 0.1; // ±10%
+          const variance = amountEth * 0.1;
           amount = randomInRange(amountEth - variance, amountEth + variance);
         }
         const parsedAmount = ethers.parseEther(amount.toFixed(6));
@@ -325,6 +335,7 @@ async function runSwap(mode, amountEth, loops, randomize) {
             addLog(`[${getShortAddress(wallet.address)}] ETH->WETH TX: ${tx.hash}`, "system");
             await tx.wait();
             addLog(`[${getShortAddress(wallet.address)}] ETH->WETH Confirmed`, "success");
+            await randomDelay();
           }
         }
 
@@ -335,6 +346,7 @@ async function runSwap(mode, amountEth, loops, randomize) {
             addLog(`[${getShortAddress(wallet.address)}] WETH->ETH TX: ${tx2.hash}`, "system");
             await tx2.wait();
             addLog(`[${getShortAddress(wallet.address)}] WETH->ETH Confirmed`, "success");
+            await randomDelay();
           } else {
             addLog(`[${getShortAddress(wallet.address)}] Skipped WETH->ETH (no WETH)`, "error");
           }
@@ -342,9 +354,15 @@ async function runSwap(mode, amountEth, loops, randomize) {
       } catch (err) {
         addLog(`[${getShortAddress(wallet.address)}] Error: ${err.message}`, "error");
       }
-      await sleep(randomInRange(1000, 4000)); // random delay antar wallet
     }
-    await sleep(randomInRange(3000, 6000)); // random delay antar loop
+    await sleep(randomInRange(3000, 6000)); // antar loop
   }
 }
+
+async function randomDelay() {
+  const delay = Math.floor(randomInRange(8000, 20000));
+  addLog(`Delay ${Math.floor(delay / 1000)} detik sebelum transaksi berikutnya...`, "system");
+  await sleep(delay);
+}
+
 safeRender();

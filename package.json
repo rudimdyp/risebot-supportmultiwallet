@@ -1,17 +1,20 @@
 {
-  "name": "NT Exhaust - Rise Auto Bot",
+  "name": "rise-auto-bot-multiwallet",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Rise Auto Bot with multi-wallet and proxy support",
+  "main": "index_multi.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index_multi.js"
   },
-  "author": "VinSenzo",
+  "author": "VinSenzo (mod by ChatGPT)",
   "license": "ISC",
   "dependencies": {
     "blessed": "^0.1.81",
     "dotenv": "^16.4.7",
     "ethers": "^6.13.5",
-    "figlet": "^1.8.0"
+    "figlet": "^1.8.0",
+    "https-proxy-agent": "^7.0.5",
+    "node-fetch": "^3.3.2"
   }
 }

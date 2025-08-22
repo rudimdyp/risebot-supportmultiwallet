@@ -9,12 +9,24 @@ import fetch from "node-fetch";
 const RPC_RISE = process.env.RPC_RISE;
 const WETH_ADDRESS = process.env.WETH_ADDRESS;
 
-// === Fix parsing private keys ===
-const privateKeys = fs.readFileSync("privatekey.txt", "utf-8")
+// === Load & Validate Private Keys ===
+const rawKeys = fs.readFileSync("privatekey.txt", "utf-8")
   .split("\n")
-  .map(line => line.trim())
-  .filter(line => line.length > 0)
-  .map(key => key.startsWith("0x") ? key : "0x" + key);
+  .map(line => line.trim().replace(/\r/g, "")); // clean CRLF
+
+const privateKeys = [];
+rawKeys.forEach((key, i) => {
+  if (/^([0-9a-fA-F]{64}|0x[0-9a-fA-F]{64})$/.test(key)) {
+    privateKeys.push(key.startsWith("0x") ? key : "0x" + key);
+  } else if (key.length > 0) {
+    console.log(`Warning: Invalid key at line ${i + 1}: ${key}`);
+  }
+});
+
+if (privateKeys.length === 0) {
+  console.error("ERROR: No valid private keys found in privatekey.txt");
+  process.exit(1);
+}
 
 let proxy = null;
 try {

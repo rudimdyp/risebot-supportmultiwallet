@@ -9,7 +9,13 @@ import fetch from "node-fetch";
 const RPC_RISE = process.env.RPC_RISE;
 const WETH_ADDRESS = process.env.WETH_ADDRESS;
 
-const privateKeys = fs.readFileSync("privatekey.txt", "utf-8").trim().split("\n");
+// === Fix parsing private keys ===
+const privateKeys = fs.readFileSync("privatekey.txt", "utf-8")
+  .split("\n")
+  .map(line => line.trim())
+  .filter(line => line.length > 0)
+  .map(key => key.startsWith("0x") ? key : "0x" + key);
+
 let proxy = null;
 try {
   proxy = fs.readFileSync("proxy.txt", "utf-8").trim();
@@ -47,7 +53,7 @@ function randomInRange(min, max) {
 // === UI Setup ===
 const screen = blessed.screen({
   smartCSR: true,
-  title: "Multi-Wallet Swap Bot",
+  title: "RISE TESTNET BOT",
   fullUnicode: true,
   mouse: true
 });
@@ -64,6 +70,8 @@ const headerBox = blessed.box({
   width: "100%",
   tags: true
 });
+
+// === Change header text ===
 figlet.text("RISE TESTNET BOT", { font: "Speed" }, (err, data) => {
   headerBox.setContent(`{center}{bright-cyan-fg}${data}{/bright-cyan-fg}`);
   safeRender();
@@ -157,7 +165,7 @@ let stopRequested = false;
 
 function showMenu() {
   menuBox.setContent(`
-{center}{bold}=== Multi-Wallet Swap Menu ==={/bold}{/center}
+{center}{bold}=== RISE TESTNET BOT MENU ==={/bold}{/center}
 
 [1] Swap Mode: {cyan-fg}${swapMode}{/cyan-fg} (toggle)
 [2] Swap Amount: {cyan-fg}${swapAmount} ETH{/cyan-fg} (input)
@@ -328,4 +336,3 @@ async function runSwap(mode, amountEth, loops, randomize) {
   }
 }
 safeRender();
-

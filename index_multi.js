@@ -36,6 +36,14 @@ function getShortAddress(addr) {
   return addr.slice(0, 6) + "..." + addr.slice(-4);
 }
 
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function randomInRange(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
 // === UI Setup ===
 const screen = blessed.screen({
   smartCSR: true,
@@ -89,7 +97,7 @@ function addLog(msg, type = "system") {
   safeRender();
 }
 
-// === Menu ===
+// Menu box
 const menuBox = blessed.box({
   label: " Menu ",
   top: 8,
@@ -102,17 +110,44 @@ const menuBox = blessed.box({
 });
 screen.append(menuBox);
 
+// Input prompt
+const inputBox = blessed.prompt({
+  parent: screen,
+  border: "line",
+  width: "50%",
+  height: "25%",
+  hidden: true,
+  keys: true,
+  tags: true,
+  label: " Input ",
+  content: "",
+  padding: 1
+});
+
+function askInput(question, callback) {
+  inputBox.readInput(question, "", (err, value) => {
+    if (value) callback(value);
+    showMenu();
+  });
+}
+
+// === Variables ===
 let swapMode = "both";
 let swapAmount = 0.001;
 let loopCount = 1;
+let randomizeAmount = true;
+
+let isRunning = false;
+let stopRequested = false;
 
 function showMenu() {
   menuBox.setContent(`
 {center}{bold}=== Multi-Wallet Swap Menu ==={/bold}{/center}
 
-[1] Swap Mode: {cyan-fg}${swapMode}{/cyan-fg} (options: eth->weth | weth->eth | both)
-[2] Swap Amount: {cyan-fg}${swapAmount} ETH{/cyan-fg}
-[3] Loop Count: {cyan-fg}${loopCount}{/cyan-fg}
+[1] Swap Mode: {cyan-fg}${swapMode}{/cyan-fg} (toggle)
+[2] Swap Amount: {cyan-fg}${swapAmount} ETH{/cyan-fg} (input)
+[3] Loop Count: {cyan-fg}${loopCount}{/cyan-fg} (input)
+[4] Randomize Amount: {cyan-fg}${randomizeAmount ? "ON" : "OFF"}{/cyan-fg}
 
 [Enter] Start Swap
 [Q] Exit Program
@@ -120,9 +155,24 @@ function showMenu() {
   menuBox.hidden = false;
   logsBox.hidden = true;
   safeRender();
+  showBalances();
 }
+
+// Show balances when menu visible
+async function showBalances() {
+  const provider = getProvider(RPC_RISE);
+  const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
+  for (const w of wallets) {
+    const ethBal = await provider.getBalance(w.address);
+    const wethContract = new ethers.Contract(WETH_ADDRESS, WETH_ABI, provider);
+    const wethBal = await wethContract.balanceOf(w.address);
+    addLog(`Wallet ${getShortAddress(w.address)} | ETH: ${Number(ethers.formatEther(ethBal)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(4)}`);
+  }
+}
+
 showMenu();
 
+// Key handlers
 screen.key(["1"], () => {
   if (swapMode === "eth->weth") swapMode = "weth->eth";
   else if (swapMode === "weth->eth") swapMode = "both";
@@ -131,19 +181,27 @@ screen.key(["1"], () => {
 });
 
 screen.key(["2"], () => {
-  swapAmount += 0.001;
-  if (swapAmount > 0.01) swapAmount = 0.001;
-  showMenu();
+  inputBox.show();
+  safeRender();
+  askInput("Masukkan jumlah ETH per swap:", val => {
+    const num = parseFloat(val);
+    if (!isNaN(num) && num > 0) swapAmount = num;
+  });
 });
 
 screen.key(["3"], () => {
-  loopCount++;
-  if (loopCount > 10) loopCount = 1;
-  showMenu();
+  inputBox.show();
+  safeRender();
+  askInput("Masukkan jumlah loop:", val => {
+    const num = parseInt(val);
+    if (!isNaN(num) && num > 0) loopCount = num;
+  });
 });
 
-let isRunning = false;
-let stopRequested = false;
+screen.key(["4"], () => {
+  randomizeAmount = !randomizeAmount;
+  showMenu();
+});
 
 screen.key(["enter"], async () => {
   if (isRunning) return;
@@ -154,7 +212,7 @@ screen.key(["enter"], async () => {
   isRunning = true;
   stopRequested = false;
   addLog(`Starting swap: Mode=${swapMode}, Amount=${swapAmount} ETH, Loops=${loopCount}`, "system");
-  await runSwap(swapMode, swapAmount, loopCount);
+  await runSwap(swapMode, swapAmount, loopCount, randomizeAmount);
   isRunning = false;
 
   if (!stopRequested) {
@@ -173,11 +231,9 @@ screen.key(["q", "escape", "C-c"], () => {
 });
 
 // === Swap Logic ===
-async function runSwap(mode, amountEth, loops) {
+async function runSwap(mode, amountEth, loops, randomize) {
   const provider = getProvider(RPC_RISE);
   const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
-  const amount = ethers.parseEther(amountEth.toString());
-
   const wethContracts = wallets.map(w => new ethers.Contract(WETH_ADDRESS, WETH_ABI, w));
 
   for (let i = 1; i <= loops && !stopRequested; i++) {
@@ -186,12 +242,19 @@ async function runSwap(mode, amountEth, loops) {
       const wallet = wallets[idx];
       const weth = wethContracts[idx];
       try {
+        let amount = amountEth;
+        if (randomize) {
+          const variance = amountEth * 0.1; // ±10%
+          amount = randomInRange(amountEth - variance, amountEth + variance);
+        }
+        const parsedAmount = ethers.parseEther(amount.toFixed(6));
+
         if (mode === "eth->weth" || mode === "both") {
           const bal = await provider.getBalance(wallet.address);
-          if (bal < amount) {
+          if (bal < parsedAmount) {
             addLog(`[${getShortAddress(wallet.address)}] Skipped ETH->WETH (low balance)`, "error");
           } else {
-            const tx = await weth.deposit({ value: amount });
+            const tx = await weth.deposit({ value: parsedAmount });
             addLog(`[${getShortAddress(wallet.address)}] ETH->WETH TX: ${tx.hash}`, "system");
             await tx.wait();
             addLog(`[${getShortAddress(wallet.address)}] ETH->WETH Confirmed`, "success");
@@ -212,14 +275,9 @@ async function runSwap(mode, amountEth, loops) {
       } catch (err) {
         addLog(`[${getShortAddress(wallet.address)}] Error: ${err.message}`, "error");
       }
-      await sleep(1500); // short delay between wallets
+      await sleep(randomInRange(1000, 4000)); // random delay antar wallet
     }
-    await sleep(3000); // short delay between loops
+    await sleep(randomInRange(3000, 6000)); // random delay antar loop
   }
 }
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
 safeRender();

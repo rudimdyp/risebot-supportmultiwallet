@@ -4,12 +4,13 @@ import figlet from "figlet";
 import { ethers } from "ethers";
 import fs from "fs";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import fetch from "node-fetch";
 
 const RPC_RISE = process.env.RPC_RISE;
 const WETH_ADDRESS = process.env.WETH_ADDRESS;
 const NETWORK_NAME = "RISE TESTNET";
 
-// Load private keys & proxies
+// === Load private keys & proxies ===
 const privateKeys = fs.readFileSync("privatekey.txt", "utf-8").trim().split("\n");
 const proxies = fs.readFileSync("proxy.txt", "utf-8").trim().split("\n");
 
@@ -18,7 +19,7 @@ const wallets = privateKeys.map((pk, i) => ({
   proxy: proxies[i] ? proxies[i].trim() : null
 }));
 
-// ABI
+// === ABI ===
 const ERC20ABI = [
   "function decimals() view returns (uint8)",
   "function balanceOf(address owner) view returns (uint256)",
@@ -26,38 +27,30 @@ const ERC20ABI = [
   "function allowance(address owner, address spender) view returns (uint256)"
 ];
 
-const WETH_ABI = [
-  "function deposit() public payable",
-  "function withdraw(uint256 wad) public",
-  "function approve(address guy, uint256 wad) public returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)"
-];
-
-// Utility
+// === Utility ===
 function getProvider(rpcUrl, proxy) {
-  if (proxy) {
-    return new ethers.JsonRpcProvider({
-      url: rpcUrl,
-      fetchOptions: { agent: new HttpsProxyAgent(proxy) }
-    });
+  try {
+    if (proxy) {
+      const agent = new HttpsProxyAgent(proxy);
+      return new ethers.JsonRpcProvider(rpcUrl, {
+        staticNetwork: null,
+        fetchFn: (req, init) => fetch(req, { ...init, agent })
+      });
+    }
+  } catch (err) {
+    addLog(`Proxy error (${proxy}): ${err.message}. Fallback tanpa proxy.`, "error");
   }
   return new ethers.JsonRpcProvider(rpcUrl);
 }
 function getShortAddress(address) {
   return address.slice(0, 6) + "..." + address.slice(-4);
 }
-function getShortHash(hash) {
-  return hash.slice(0, 6) + "..." + hash.slice(-4);
-}
 
-// === Variabel asli tetap ===
+// === Variabel ===
 let transactionLogs = [];
 let globalWallets = [];
-let transactionQueue = Promise.resolve();
-let transactionQueueList = [];
-let transactionIdCounter = 0;
 
-// === Blessed UI setup (tidak diubah) ===
+// === Blessed UI ===
 const screen = blessed.screen({
   smartCSR: true,
   title: "GasPump Swap - Multi Wallet",

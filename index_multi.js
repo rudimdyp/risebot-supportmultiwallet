@@ -52,7 +52,7 @@ function createUI() {
     smartCSR: true,
     title: "ETH <-> WETH Multi-Wallet Bot",
     fullUnicode: true,
-    mouse: false // ✅ Matikan mouse agar tidak trigger input
+    mouse: false // ✅ disable mouse input
   });
 
   let renderTimeout;
@@ -111,9 +111,10 @@ function createUI() {
 }
 
 // === Main Bot ===
-async function runBot(loopCount, addLog) {
+async function runBot(loopCount, swapAmountEth, addLog) {
   const provider = getProvider(RPC_RISE);
   const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
+  const swapAmount = ethers.parseEther(swapAmountEth.toString());
 
   addLog("Fetching balances...", "system");
   for (const wallet of wallets) {
@@ -123,7 +124,7 @@ async function runBot(loopCount, addLog) {
     addLog(`Wallet ${getShortAddress(wallet.address)} | ETH: ${Number(ethers.formatEther(ethBal)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(4)} | Proxy: ${proxy || "none"}`, "system");
   }
 
-  addLog(`Starting ${loopCount} swaps per wallet... Press Q to stop`, "system");
+  addLog(`Starting ${loopCount} swaps per wallet (amount: ${swapAmountEth} ETH)... Press Q to stop`, "system");
 
   for (let i = 1; i <= loopCount && isRunning; i++) {
     addLog(`=== Loop ${i} ===`, "system");
@@ -131,23 +132,25 @@ async function runBot(loopCount, addLog) {
       if (!isRunning) break;
       try {
         const ethBal = await provider.getBalance(wallet.address);
-        const wethContract = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
-        const amount = ethBal / BigInt(4); // 25%
-
-        if (amount > 0n) {
-          const tx1 = await wethContract.deposit({ value: amount });
-          addLog(`[${getShortAddress(wallet.address)}] Deposit TX: ${tx1.hash}`, "system");
-          await tx1.wait();
-          addLog(`[${getShortAddress(wallet.address)}] Deposit Confirmed`, "success");
-
-          const wethBalAfter = await wethContract.balanceOf(wallet.address);
-          const tx2 = await wethContract.withdraw(wethBalAfter);
-          addLog(`[${getShortAddress(wallet.address)}] Withdraw TX: ${tx2.hash}`, "system");
-          await tx2.wait();
-          addLog(`[${getShortAddress(wallet.address)}] Withdraw Confirmed`, "success");
-        } else {
-          addLog(`[${getShortAddress(wallet.address)}] Skipped: No ETH`, "error");
+        if (ethBal < swapAmount) {
+          addLog(`[${getShortAddress(wallet.address)}] Skipped: ETH < ${swapAmountEth}`, "error");
+          continue;
         }
+
+        const wethContract = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
+
+        // ETH -> WETH
+        const tx1 = await wethContract.deposit({ value: swapAmount });
+        addLog(`[${getShortAddress(wallet.address)}] Deposit TX: ${tx1.hash}`, "system");
+        await tx1.wait();
+        addLog(`[${getShortAddress(wallet.address)}] Deposit Confirmed`, "success");
+
+        // WETH -> ETH
+        const wethBalAfter = await wethContract.balanceOf(wallet.address);
+        const tx2 = await wethContract.withdraw(wethBalAfter);
+        addLog(`[${getShortAddress(wallet.address)}] Withdraw TX: ${tx2.hash}`, "system");
+        await tx2.wait();
+        addLog(`[${getShortAddress(wallet.address)}] Withdraw Confirmed`, "success");
       } catch (err) {
         addLog(`[${getShortAddress(wallet.address)}] Swap Error: ${err.message}`, "error");
       }
@@ -163,15 +166,24 @@ async function runBot(loopCount, addLog) {
 
 // === Prompt BEFORE UI ===
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-rl.question("Berapa kali transaksi per wallet? ", answer => {
-  const loopCount = parseInt(answer);
+
+rl.question("Berapa kali transaksi per wallet? ", answer1 => {
+  const loopCount = parseInt(answer1);
   if (isNaN(loopCount) || loopCount <= 0) {
     console.log("Input tidak valid!");
     process.exit(1);
   }
-  rl.close();
 
-  const { addLog, screen } = createUI();
-  addLog("Multi-wallet bot started!", "system");
-  runBot(loopCount, addLog);
+  rl.question("Masukkan jumlah ETH per swap (contoh: 0.001): ", answer2 => {
+    const swapAmountEth = parseFloat(answer2);
+    if (isNaN(swapAmountEth) || swapAmountEth <= 0) {
+      console.log("Jumlah tidak valid!");
+      process.exit(1);
+    }
+    rl.close();
+
+    const { addLog } = createUI();
+    addLog("Multi-wallet bot started!", "system");
+    runBot(loopCount, swapAmountEth, addLog);
+  });
 });

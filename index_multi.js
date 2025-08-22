@@ -110,6 +110,21 @@ const menuBox = blessed.box({
 });
 screen.append(menuBox);
 
+// Nonce info box
+const nonceBox = blessed.box({
+  label: " Nonce Info ",
+  top: 8,
+  left: "center",
+  width: "80%",
+  height: "70%",
+  border: { type: "line" },
+  tags: true,
+  hidden: true,
+  scrollable: true,
+  alwaysScroll: true
+});
+screen.append(nonceBox);
+
 // Input prompt
 const inputBox = blessed.prompt({
   parent: screen,
@@ -149,11 +164,13 @@ function showMenu() {
 [3] Loop Count: {cyan-fg}${loopCount}{/cyan-fg} (input)
 [4] Randomize Amount: {cyan-fg}${randomizeAmount ? "ON" : "OFF"}{/cyan-fg}
 
+[T] Lihat Nonce (jumlah transaksi)
 [Enter] Start Swap
 [Q] Exit Program
 `);
   menuBox.hidden = false;
   logsBox.hidden = true;
+  nonceBox.hidden = true;
   safeRender();
   showBalances();
 }
@@ -203,10 +220,40 @@ screen.key(["4"], () => {
   showMenu();
 });
 
+// Show Nonce info
+screen.key(["t"], async () => {
+  menuBox.hidden = true;
+  logsBox.hidden = true;
+  nonceBox.hidden = false;
+  nonceBox.setContent("{center}Mengambil data nonce...{/center}");
+  safeRender();
+
+  const provider = getProvider(RPC_RISE);
+  let content = "{center}{bold}Nonce per Wallet{/bold}{/center}\n\n";
+  for (const pk of privateKeys) {
+    const wallet = new ethers.Wallet(pk.trim());
+    const nonce = await provider.getTransactionCount(wallet.address);
+    content += `Wallet ${getShortAddress(wallet.address)} | TX Count: {cyan-fg}${nonce}{/cyan-fg}\n`;
+  }
+  content += "\n[B] Kembali ke Menu";
+  nonceBox.setContent(content);
+  safeRender();
+});
+
+// Back from nonce menu
+screen.key(["b"], () => {
+  if (!nonceBox.hidden) {
+    nonceBox.hidden = true;
+    showMenu();
+  }
+});
+
+// Start Swap
 screen.key(["enter"], async () => {
   if (isRunning) return;
   menuBox.hidden = true;
   logsBox.hidden = false;
+  nonceBox.hidden = true;
   safeRender();
 
   isRunning = true;

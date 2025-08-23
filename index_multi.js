@@ -62,20 +62,21 @@ if (privateKeys.length === 0) {
   process.exit(1);
 }
 
-console.log("======================================");
-console.log("   RISE TESTNET BOT - LIGHT MODE");
-console.log("======================================");
-console.log(`Wallets loaded: ${privateKeys.length}`);
-console.log(`Swap Mode: ${SWAP_MODE}`);
-console.log(`Amount: ${SWAP_AMOUNT} ETH`);
-console.log(`Loops: ${LOOP_COUNT}`);
-console.log(`Randomize: ${RANDOMIZE}`);
-console.log(`Auto Daily: ${AUTO_DAILY}`);
-console.log("--------------------------------------");
+const command = process.argv[2] || "swap"; // default mode: swap
 
-let txCounter = 0;
+async function runSwap() {
+  console.log("======================================");
+  console.log("   RISE TESTNET BOT - SWAP MODE");
+  console.log("======================================");
+  console.log(`Wallets loaded: ${privateKeys.length}`);
+  console.log(`Swap Mode: ${SWAP_MODE}`);
+  console.log(`Amount: ${SWAP_AMOUNT} ETH`);
+  console.log(`Loops: ${LOOP_COUNT}`);
+  console.log(`Randomize: ${RANDOMIZE}`);
+  console.log(`Auto Daily: ${AUTO_DAILY}`);
+  console.log("--------------------------------------");
 
-async function runBot() {
+  let txCounter = 0;
   const provider = getProvider(RPC_RISE);
   const wallets = privateKeys.map(pk => new ethers.Wallet(pk, provider));
   const wethContracts = wallets.map(w => new ethers.Contract(WETH_ADDRESS, WETH_ABI, w));
@@ -129,6 +130,26 @@ async function runBot() {
   }
 }
 
+async function showStatus() {
+  console.log("======================================");
+  console.log("   RISE TESTNET BOT - STATUS MODE");
+  console.log("======================================");
+
+  const provider = getProvider(RPC_RISE);
+  const weth = new ethers.Contract(WETH_ADDRESS, WETH_ABI, provider);
+
+  for (const pk of privateKeys) {
+    const wallet = new ethers.Wallet(pk);
+    const addr = wallet.address;
+    const ethBal = await provider.getBalance(addr);
+    const wethBal = await weth.balanceOf(addr);
+    const nonce = await provider.getTransactionCount(addr);
+
+    console.log(`Wallet: ${addr}`);
+    console.log(`  ETH: ${Number(ethers.formatEther(ethBal)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(4)} | TX Count: ${nonce}`);
+  }
+}
+
 async function randomDelay() {
   const delay = Math.floor(randomInRange(8000, 20000));
   console.log(`Delay ${Math.floor(delay / 1000)} detik...`);
@@ -136,11 +157,16 @@ async function randomDelay() {
 }
 
 (async () => {
-  do {
-    await runBot();
-    if (AUTO_DAILY) {
-      console.log(`\nAuto Daily active. Waiting 24 hours before next run...`);
-      await sleep(86400000);
-    }
-  } while (AUTO_DAILY);
+  if (command === "status") {
+    await showStatus();
+    process.exit(0);
+  } else {
+    do {
+      await runSwap();
+      if (AUTO_DAILY) {
+        console.log(`\nAuto Daily active. Waiting 24 hours before next run...`);
+        await sleep(86400000);
+      }
+    } while (AUTO_DAILY);
+  }
 })();

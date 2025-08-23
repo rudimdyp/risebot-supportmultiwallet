@@ -1,38 +1,22 @@
 import "dotenv/config";
-import blessed from "blessed";
-import figlet from "figlet";
 import { ethers } from "ethers";
 import fs from "fs";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import fetch from "node-fetch";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
 const RPC_RISE = process.env.RPC_RISE;
 const WETH_ADDRESS = process.env.WETH_ADDRESS;
-
-// === Load & Validate Private Keys ===
-const rawKeys = fs.readFileSync("privatekey.txt", "utf-8")
-  .split("\n")
-  .map(line => line.trim().replace(/\r/g, "")); // clean CRLF
-
-const privateKeys = [];
-rawKeys.forEach((key, i) => {
-  if (/^([0-9a-fA-F]{64}|0x[0-9a-fA-F]{64})$/.test(key)) {
-    privateKeys.push(key.startsWith("0x") ? key : "0x" + key);
-  } else if (key.length > 0) {
-    console.log(`Warning: Invalid key at line ${i + 1}: ${key}`);
-  }
-});
-
-if (privateKeys.length === 0) {
-  console.error("ERROR: No valid private keys found in privatekey.txt");
-  process.exit(1);
-}
+const SWAP_MODE = process.env.SWAP_MODE || "both";
+const SWAP_AMOUNT = parseFloat(process.env.SWAP_AMOUNT || "0.001");
+const LOOP_COUNT = parseInt(process.env.LOOP_COUNT || "1");
+const RANDOMIZE = process.env.RANDOMIZE === "true";
+const AUTO_DAILY = process.env.AUTO_DAILY === "true";
 
 let proxy = null;
 try {
   proxy = fs.readFileSync("proxy.txt", "utf-8").trim();
-} catch (e) {
-  console.log("Proxy file not found, running without proxy.");
+} catch {
+  console.log("No proxy.txt found, running without proxy...");
 }
 
 const WETH_ABI = [
@@ -41,328 +25,122 @@ const WETH_ABI = [
   "function balanceOf(address owner) view returns (uint256)"
 ];
 
-function getProvider(rpcUrl) {
+function getProvider(rpc) {
   if (proxy) {
     const agent = new HttpsProxyAgent(proxy);
     const customFetch = (req, init) => fetch(req, { ...init, agent });
-    return new ethers.JsonRpcProvider(rpcUrl, undefined, { fetch: customFetch });
+    return new ethers.JsonRpcProvider(rpc, undefined, { fetch: customFetch });
   }
-  return new ethers.JsonRpcProvider(rpcUrl);
-}
-
-function getShortAddress(addr) {
-  return addr.slice(0, 6) + "..." + addr.slice(-4);
+  return new ethers.JsonRpcProvider(rpc);
 }
 
 function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise(res => setTimeout(res, ms));
 }
 
 function randomInRange(min, max) {
   return Math.random() * (max - min) + min;
 }
 
-// === UI Setup ===
-const screen = blessed.screen({
-  smartCSR: true,
-  title: "RISE TESTNET BOT",
-  fullUnicode: true,
-  mouse: true
-});
+// === Load Private Keys ===
+const rawKeys = fs.readFileSync("privatekey.txt", "utf-8")
+  .split("\n")
+  .map(line => line.trim())
+  .filter(Boolean);
 
-let renderTimeout;
-function safeRender() {
-  if (renderTimeout) clearTimeout(renderTimeout);
-  renderTimeout = setTimeout(() => screen.render(), 50);
-}
-
-const headerBox = blessed.box({
-  top: 0,
-  left: "center",
-  width: "100%",
-  tags: true
-});
-
-figlet.text("RISE TESTNET BOT", { font: "Speed" }, (err, data) => {
-  headerBox.setContent(`{center}{bright-cyan-fg}${data}{/bright-cyan-fg}`);
-  safeRender();
-});
-screen.append(headerBox);
-
-// Logs box
-const logsBox = blessed.box({
-  label: " Logs ",
-  top: 8,
-  left: 0,
-  width: "100%",
-  height: "70%",
-  border: { type: "line" },
-  scrollable: true,
-  alwaysScroll: true,
-  keys: true,
-  vi: true,
-  tags: true,
-  scrollbar: { ch: " ", inverse: true }
-});
-screen.append(logsBox);
-
-function addLog(msg, type = "system") {
-  const timestamp = new Date().toLocaleTimeString();
-  let color = msg;
-  if (type === "success") color = `{green-fg}${msg}{/green-fg}`;
-  if (type === "error") color = `{red-fg}${msg}{/red-fg}`;
-  logsBox.pushLine(`{gray-fg}${timestamp}{/gray-fg} ${color}`);
-  logsBox.setScrollPerc(100);
-  safeRender();
-}
-
-// Menu box
-const menuBox = blessed.box({
-  label: " Menu ",
-  top: 8,
-  left: "center",
-  width: "80%",
-  height: "70%",
-  border: { type: "line" },
-  tags: true,
-  hidden: false
-});
-screen.append(menuBox);
-
-// Nonce info box
-const nonceBox = blessed.box({
-  label: " Nonce Info ",
-  top: 8,
-  left: "center",
-  width: "80%",
-  height: "70%",
-  border: { type: "line" },
-  tags: true,
-  hidden: true,
-  scrollable: true,
-  alwaysScroll: true
-});
-screen.append(nonceBox);
-
-// Input prompt
-const inputBox = blessed.prompt({
-  parent: screen,
-  border: "line",
-  width: "50%",
-  height: "25%",
-  hidden: true,
-  keys: true,
-  tags: true,
-  label: " Input ",
-  content: "",
-  padding: 1
-});
-
-function askInput(question, callback) {
-  inputBox.readInput(question, "", (err, value) => {
-    if (value) callback(value);
-    showMenu();
-  });
-}
-
-// === Variables ===
-let swapMode = "both";
-let swapAmount = 0.001;
-let loopCount = 1;
-let randomizeAmount = true;
-let autoDaily = false;
-
-let isRunning = false;
-let stopRequested = false;
-
-function showMenu() {
-  menuBox.setContent(`
-{center}{bold}=== RISE TESTNET BOT MENU ==={/bold}{/center}
-
-[1] Swap Mode: {cyan-fg}${swapMode}{/cyan-fg} (toggle)
-[2] Swap Amount: {cyan-fg}${swapAmount} ETH{/cyan-fg} (input)
-[3] Loop Count: {cyan-fg}${loopCount}{/cyan-fg} (input)
-[4] Randomize Amount: {cyan-fg}${randomizeAmount ? "ON" : "OFF"}{/cyan-fg}
-[5] Auto Daily: {cyan-fg}${autoDaily ? "ON" : "OFF"}{/cyan-fg}
-
-[T] Lihat Nonce (jumlah transaksi)
-[Enter] Start Swap
-[Q] Exit Program
-`);
-  menuBox.hidden = false;
-  logsBox.hidden = true;
-  nonceBox.hidden = true;
-  safeRender();
-  showBalances();
-}
-
-async function showBalances() {
-  const provider = getProvider(RPC_RISE);
-  const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
-  for (const w of wallets) {
-    const ethBal = await provider.getBalance(w.address);
-    const wethContract = new ethers.Contract(WETH_ADDRESS, WETH_ABI, provider);
-    const wethBal = await wethContract.balanceOf(w.address);
-    addLog(`Wallet ${getShortAddress(w.address)} | ETH: ${Number(ethers.formatEther(ethBal)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(4)}`);
-  }
-}
-
-showMenu();
-
-// === Key Handlers ===
-screen.key(["1"], () => {
-  if (swapMode === "eth->weth") swapMode = "weth->eth";
-  else if (swapMode === "weth->eth") swapMode = "both";
-  else swapMode = "eth->weth";
-  showMenu();
-});
-
-screen.key(["2"], () => {
-  inputBox.show();
-  safeRender();
-  askInput("Masukkan jumlah ETH per swap:", val => {
-    const num = parseFloat(val);
-    if (!isNaN(num) && num > 0) swapAmount = num;
-  });
-});
-
-screen.key(["3"], () => {
-  inputBox.show();
-  safeRender();
-  askInput("Masukkan jumlah loop:", val => {
-    const num = parseInt(val);
-    if (!isNaN(num) && num > 0) loopCount = num;
-  });
-});
-
-screen.key(["4"], () => {
-  randomizeAmount = !randomizeAmount;
-  showMenu();
-});
-
-screen.key(["5"], () => {
-  autoDaily = !autoDaily;
-  showMenu();
-});
-
-screen.key(["t"], async () => {
-  menuBox.hidden = true;
-  logsBox.hidden = true;
-  nonceBox.hidden = false;
-  nonceBox.setContent("{center}Mengambil data nonce...{/center}");
-  safeRender();
-
-  const provider = getProvider(RPC_RISE);
-  let content = "{center}{bold}Nonce per Wallet{/bold}{/center}\n\n";
-  for (const pk of privateKeys) {
-    const wallet = new ethers.Wallet(pk.trim());
-    const nonce = await provider.getTransactionCount(wallet.address);
-    content += `Wallet ${getShortAddress(wallet.address)} | TX Count: {cyan-fg}${nonce}{/cyan-fg}\n`;
-  }
-  content += "\n[B] Kembali ke Menu";
-  nonceBox.setContent(content);
-  safeRender();
-});
-
-screen.key(["b"], () => {
-  if (!nonceBox.hidden) {
-    nonceBox.hidden = true;
-    showMenu();
-  }
-});
-
-screen.key(["enter"], async () => {
-  if (isRunning) return;
-  menuBox.hidden = true;
-  logsBox.hidden = false;
-  nonceBox.hidden = true;
-  safeRender();
-
-  isRunning = true;
-  stopRequested = false;
-
-  do {
-    addLog(`Starting swap: Mode=${swapMode}, Amount=${swapAmount} ETH, Loops=${loopCount}`, "system");
-    await runSwap(swapMode, swapAmount, loopCount, randomizeAmount);
-    if (!stopRequested && autoDaily) {
-      const nextRun = new Date(Date.now() + 86400000);
-      addLog(`Next swap in 24 hours at ${nextRun.toLocaleString()}`, "system");
-      await sleep(86400000);
-    }
-  } while (autoDaily && !stopRequested);
-
-  isRunning = false;
-  if (!stopRequested) {
-    addLog("Swaps completed. Returning to menu...", "success");
-    setTimeout(showMenu, 2000);
-  }
-});
-
-screen.key(["q", "escape", "C-c"], () => {
-  if (isRunning) {
-    stopRequested = true;
-    addLog("Stopping current swaps...", "error");
+const privateKeys = [];
+rawKeys.forEach((key, i) => {
+  if (/^([0-9a-fA-F]{64}|0x[0-9a-fA-F]{64})$/.test(key)) {
+    privateKeys.push(key.startsWith("0x") ? key : "0x" + key);
   } else {
-    process.exit(0);
+    console.log(`Warning: Invalid key at line ${i + 1}: ${key}`);
   }
 });
 
-// === Swap Logic ===
-async function runSwap(mode, amountEth, loops, randomize) {
+if (privateKeys.length === 0) {
+  console.error("ERROR: No valid private keys in privatekey.txt");
+  process.exit(1);
+}
+
+console.log("======================================");
+console.log("   RISE TESTNET BOT - LIGHT MODE");
+console.log("======================================");
+console.log(`Wallets loaded: ${privateKeys.length}`);
+console.log(`Swap Mode: ${SWAP_MODE}`);
+console.log(`Amount: ${SWAP_AMOUNT} ETH`);
+console.log(`Loops: ${LOOP_COUNT}`);
+console.log(`Randomize: ${RANDOMIZE}`);
+console.log(`Auto Daily: ${AUTO_DAILY}`);
+console.log("--------------------------------------");
+
+let txCounter = 0;
+
+async function runBot() {
   const provider = getProvider(RPC_RISE);
-  const wallets = privateKeys.map(pk => new ethers.Wallet(pk.trim(), provider));
+  const wallets = privateKeys.map(pk => new ethers.Wallet(pk, provider));
   const wethContracts = wallets.map(w => new ethers.Contract(WETH_ADDRESS, WETH_ABI, w));
 
-  for (let i = 1; i <= loops && !stopRequested; i++) {
-    addLog(`Loop ${i}/${loops}`, "system");
-    for (let idx = 0; idx < wallets.length && !stopRequested; idx++) {
+  for (let i = 1; i <= LOOP_COUNT; i++) {
+    console.log(`\n=== Loop ${i}/${LOOP_COUNT} ===`);
+    for (let idx = 0; idx < wallets.length; idx++) {
       const wallet = wallets[idx];
+      const shortAddr = wallet.address.slice(0, 6) + "..." + wallet.address.slice(-4);
       const weth = wethContracts[idx];
+
       try {
-        let amount = amountEth;
-        if (randomize) {
-          const variance = amountEth * 0.1;
-          amount = randomInRange(amountEth - variance, amountEth + variance);
+        let amount = SWAP_AMOUNT;
+        if (RANDOMIZE) {
+          const variance = SWAP_AMOUNT * 0.1;
+          amount = randomInRange(SWAP_AMOUNT - variance, SWAP_AMOUNT + variance);
         }
         const parsedAmount = ethers.parseEther(amount.toFixed(6));
 
-        if (mode === "eth->weth" || mode === "both") {
-          const bal = await provider.getBalance(wallet.address);
-          if (bal < parsedAmount) {
-            addLog(`[${getShortAddress(wallet.address)}] Skipped ETH->WETH (low balance)`, "error");
-          } else {
+        if (SWAP_MODE === "eth->weth" || SWAP_MODE === "both") {
+          const ethBal = await provider.getBalance(wallet.address);
+          if (ethBal >= parsedAmount) {
             const tx = await weth.deposit({ value: parsedAmount });
-            addLog(`[${getShortAddress(wallet.address)}] ETH->WETH TX: ${tx.hash}`, "system");
+            console.log(`[${shortAddr}] ETH->WETH TX: ${tx.hash}`);
             await tx.wait();
-            addLog(`[${getShortAddress(wallet.address)}] ETH->WETH Confirmed`, "success");
+            txCounter++;
+            console.log(`[${shortAddr}] Confirmed | TX#${txCounter}`);
             await randomDelay();
+          } else {
+            console.log(`[${shortAddr}] Skip ETH->WETH (low ETH)`);
           }
         }
 
-        if ((mode === "weth->eth" || mode === "both") && !stopRequested) {
-          const wbal = await weth.balanceOf(wallet.address);
-          if (wbal > 0n) {
-            const tx2 = await weth.withdraw(wbal);
-            addLog(`[${getShortAddress(wallet.address)}] WETH->ETH TX: ${tx2.hash}`, "system");
+        if ((SWAP_MODE === "weth->eth" || SWAP_MODE === "both")) {
+          const wethBal = await weth.balanceOf(wallet.address);
+          if (wethBal > 0n) {
+            const tx2 = await weth.withdraw(wethBal);
+            console.log(`[${shortAddr}] WETH->ETH TX: ${tx2.hash}`);
             await tx2.wait();
-            addLog(`[${getShortAddress(wallet.address)}] WETH->ETH Confirmed`, "success");
+            txCounter++;
+            console.log(`[${shortAddr}] Confirmed | TX#${txCounter}`);
             await randomDelay();
           } else {
-            addLog(`[${getShortAddress(wallet.address)}] Skipped WETH->ETH (no WETH)`, "error");
+            console.log(`[${shortAddr}] Skip WETH->ETH (no WETH)`);
           }
         }
       } catch (err) {
-        addLog(`[${getShortAddress(wallet.address)}] Error: ${err.message}`, "error");
+        console.log(`[${shortAddr}] Error: ${err.message}`);
       }
     }
-    await sleep(randomInRange(3000, 6000)); // antar loop
   }
 }
 
 async function randomDelay() {
   const delay = Math.floor(randomInRange(8000, 20000));
-  addLog(`Delay ${Math.floor(delay / 1000)} detik sebelum transaksi berikutnya...`, "system");
+  console.log(`Delay ${Math.floor(delay / 1000)} detik...`);
   await sleep(delay);
 }
 
-safeRender();
+(async () => {
+  do {
+    await runBot();
+    if (AUTO_DAILY) {
+      console.log(`\nAuto Daily active. Waiting 24 hours before next run...`);
+      await sleep(86400000);
+    }
+  } while (AUTO_DAILY);
+})();

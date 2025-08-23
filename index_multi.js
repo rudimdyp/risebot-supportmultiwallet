@@ -11,6 +11,7 @@ const SWAP_AMOUNT = parseFloat(process.env.SWAP_AMOUNT || "0.001");
 const LOOP_COUNT = parseInt(process.env.LOOP_COUNT || "1");
 const RANDOMIZE = process.env.RANDOMIZE === "true";
 const AUTO_DAILY = process.env.AUTO_DAILY === "true";
+const DECIMALS = parseInt(process.env.DECIMALS || "7");
 
 let proxy = null;
 try {
@@ -146,7 +147,7 @@ async function showStatus() {
     const nonce = await provider.getTransactionCount(addr);
 
     console.log(`Wallet: ${addr}`);
-    console.log(`  ETH: ${Number(ethers.formatEther(ethBal)).toFixed(4)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(4)} | TX Count: ${nonce}`);
+    console.log(`  ETH: ${Number(ethers.formatEther(ethBal)).toFixed(DECIMALS)} | WETH: ${Number(ethers.formatEther(wethBal)).toFixed(DECIMALS)} | TX Count: ${nonce}`);
   }
 }
 
